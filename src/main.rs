@@ -13,10 +13,15 @@ use rayon::prelude::*;
 use twox_hash::XxHash64;
 use walkdir::WalkDir;
 
+mod db;
+
 const SEED: u64 = 0x431C_71C5_AD99_39B4;
 const CHUNK_SIZE: usize = 1 << 16;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Initialize the db early
+    let _ = db::Db::open().unwrap();
+
     let mut args = env::args();
     let _ = args.next().unwrap(); // Throw away the binary’s name
     let root_dir = args.next().unwrap();
@@ -31,25 +36,35 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         })
         .collect::<Vec<_>>();
-    all_files.par_iter().for_each(|entry| {
-        let path = entry.path();
-        let mut f = File::open(path).unwrap();
-        let mut b = [0u8; CHUNK_SIZE];
-        let mut hasher = XxHash64::with_seed(SEED);
-        loop {
-            let n = f.read(&mut b).unwrap();
-            // This will hash trailing null bytes, but it's fine: if a file differs only by null
-            // bytes, for our purpose, we can deem it equal.
-            hasher.write(&b);
-            if n == 0 {
-                break;
+    all_files.par_iter().for_each_init(
+        || db::Db::open().unwrap(),
+        |db, entry| {
+            let path = entry.path();
+            let mut f = File::open(path).unwrap();
+            let mut b = [0u8; CHUNK_SIZE];
+            let mut hasher = XxHash64::with_seed(SEED);
+            loop {
+                let n = f.read(&mut b).unwrap();
+                // This will hash trailing null bytes, but it's fine: if a file differs only by null
+                // bytes, for our purpose, we can deem it equal.
+                hasher.write(&b);
+                if n == 0 {
+                    break;
+                }
             }
-        }
-        let hash = hasher.finish();
+            let hash = hasher.finish();
 
-        let metadata = path.metadata().unwrap();
-        println!("{hash} {:?}:{:?}:{}", metadata.modified().unwrap(), metadata.len(), path.display());
-    });
+            let metadata = path.metadata().unwrap();
+            db.add_entry(&path, &metadata, hash)
+                .expect("entry should be added without issues");
+            //println!(
+            //    "{hash} {:?}:{:?}:{}",
+            //    metadata.modified().unwrap(),
+            //    metadata.len(),
+            //    path.display()
+            //);
+        },
+    );
 
     Ok(())
 }
