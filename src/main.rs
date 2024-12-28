@@ -40,29 +40,37 @@ fn main() -> Result<(), Box<dyn Error>> {
         || db::Db::open().unwrap(),
         |db, entry| {
             let path = entry.path();
-            let mut f = File::open(path).unwrap();
-            let mut b = [0u8; CHUNK_SIZE];
-            let mut hasher = XxHash64::with_seed(SEED);
-            loop {
-                let n = f.read(&mut b).unwrap();
-                // This will hash trailing null bytes, but it's fine: if a file differs only by null
-                // bytes, for our purpose, we can deem it equal.
-                hasher.write(&b);
-                if n == 0 {
-                    break;
-                }
-            }
-            let hash = hasher.finish();
-
             let metadata = path.metadata().unwrap();
-            db.add_entry(&path, &metadata, hash)
-                .expect("entry should be added without issues");
-            //println!(
-            //    "{hash} {:?}:{:?}:{}",
-            //    metadata.modified().unwrap(),
-            //    metadata.len(),
-            //    path.display()
-            //);
+
+            if !db.exists_by_metadata(path, &metadata).unwrap() {
+                println!("Recalculating hash for {path:?}");
+
+                let mut f = File::open(path).unwrap();
+                let mut b = [0u8; CHUNK_SIZE];
+                let mut hasher = XxHash64::with_seed(SEED);
+                loop {
+                    let n = f.read(&mut b).unwrap();
+                    // This will hash trailing null bytes, but it's fine: if a file differs only by null
+                    // bytes, for our purpose, we can deem it equal.
+                    hasher.write(&b);
+                    if n == 0 {
+                        break;
+                    }
+                }
+                let hash = hasher.finish();
+
+                if db.exists_by_hash(path, &metadata, hash).unwrap() {
+                    println!("Only metadata changed for {path:?}")
+                } else {
+                    println!("Everything changed for {path:?}")
+                }
+
+                // Update either way, to at least avoid computing hashes in the future
+                db.upsert_entry(&path, &metadata, hash)
+                    .expect("entry should be added without issues");
+            } else {
+                println!("No change to {path:?}");
+            }
         },
     );
 

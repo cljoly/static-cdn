@@ -31,9 +31,36 @@ impl Db {
         Ok(Db { conn })
     }
 
-    pub fn add_entry(&self, path: &Path, metadata: &Metadata, hash: u64) -> Result<()> {
+    pub fn exists_by_metadata(&self, path: &Path, metadata: &Metadata) -> Result<bool> {
         let mut stmt = self.conn.prepare_cached(
-            r#"INSERT INTO files (path, datetime, size, checksum)
+            r#"SELECT *
+            FROM files
+            WHERE path = ?1 AND datetime = ?2 AND size = ?3"#,
+        )?;
+        let modified_since_epoch = metadata.modified()?.duration_since(UNIX_EPOCH)?;
+        let len = metadata.len();
+        let mut rows = stmt.query(params![
+            path.to_str(),
+            modified_since_epoch.as_secs_f64(),
+            len,
+        ])?;
+        Ok(rows.next()?.is_some())
+    }
+
+    pub fn exists_by_hash(&self, path: &Path, metadata: &Metadata, hash: u64) -> Result<bool> {
+        let mut stmt = self.conn.prepare_cached(
+            r#"SELECT *
+            FROM files
+            WHERE path = ?1 AND size = ?2 AND checksum = ?3"#,
+        )?;
+        let len = metadata.len();
+        let mut rows = stmt.query(params![path.to_str(), len, hash.to_le_bytes(),])?;
+        Ok(rows.next()?.is_some())
+    }
+
+    pub fn upsert_entry(&self, path: &Path, metadata: &Metadata, hash: u64) -> Result<()> {
+        let mut stmt = self.conn.prepare_cached(
+            r#"INSERT OR REPLACE INTO files (path, datetime, size, checksum)
             VALUES (?1, ?2, ?3, ?4)"#,
         )?;
         let modified_since_epoch = metadata.modified()?.duration_since(UNIX_EPOCH)?;
