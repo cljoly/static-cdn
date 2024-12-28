@@ -19,8 +19,8 @@ const CHUNK_SIZE: usize = 1 << 16;
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = env::args();
     let _ = args.next().unwrap(); // Throw away the binary’s name
-    let all_files = WalkDir::new(args.next().unwrap())
-        .max_open(args.next().unwrap().parse()?)
+    let root_dir = args.next().unwrap();
+    let all_files = WalkDir::new(root_dir)
         .into_iter()
         .filter_map(|entry| {
             let entry = entry.unwrap();
@@ -46,7 +46,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         let hash = hasher.finish();
-        println!("{hash} {}", path.display());
+
+        let metadata = path.metadata().unwrap();
+        println!("{hash} {:?}:{:?}:{}", metadata.modified().unwrap(), metadata.len(), path.display());
     });
 
     Ok(())
