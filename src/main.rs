@@ -18,10 +18,9 @@ mod db;
 
 use crate::checksum::Checksum;
 
-fn main() -> Result<ExitCode> {
-    // Initialize the db early
-    let _ = db::Db::open().unwrap();
+use self::db::MetadataValues;
 
+fn main() -> Result<ExitCode> {
     let mut args = env::args();
     let _ = args.next().unwrap(); // Throw away the binary’s name
     let root_dir = args.next().unwrap();
@@ -40,57 +39,85 @@ fn main() -> Result<ExitCode> {
 
     // A Vec<()> takes no memory per element, but it's useful to count how many such elements there
     // are
-    let ((unchanged, updates), errors): ((Vec<()>, Vec<_>), Vec<_>) = all_files
+    let ((unchanged, updates), (store, errors)): ((Vec<()>, Vec<_>), (Vec<_>, Vec<_>)) = all_files
         .par_iter()
         .map_init(
             || db::Db::open().unwrap(),
-            |db, entry| -> Result<Option<&Path>> {
+            |db, entry| -> Result<PathOutcome> {
                 let path = entry.path();
-                let metadata = path.metadata()?;
+                let metadata_values = MetadataValues::from(&path.metadata()?);
 
-                if !db.exists_by_metadata(path, &metadata)? {
+                if !db.exists_by_metadata(path, &metadata_values)? {
                     let checksum = Checksum::compute(path)?;
-                    let r = if db.exists_by_len_and_checksum(path, &metadata, checksum)? {
-                        // Only the metadata changed, nothing to do
-                        Ok(None)
+                    if db.exists_by_len_and_checksum(path, &metadata_values, checksum)? {
+                        Ok(PathOutcome::UpdateMetdata(&path, metadata_values))
                     } else {
-                        // Everything changed
-                        Ok(Some(path))
-                    };
-
-                    // Update either way, to at least avoid computing checksums in the future
-                    db.upsert_entry(&path, &metadata, checksum)
-                        .expect("entry should be added without issues");
-
-                    r
+                        Ok(PathOutcome::StoreAndInvalidate(
+                            &path,
+                            metadata_values,
+                            checksum,
+                        ))
+                    }
                 } else {
-                    // No changes, nothing to do
-                    Ok(None)
+                    Ok(PathOutcome::Skip)
                 }
             },
         )
         .partition_map(|r| match r {
-            Ok(None) => Either::Left(Either::Left(())),
-            Ok(Some(path)) => Either::Left(Either::Right(path)),
-            Err(e) => Either::Right(e),
+            Ok(PathOutcome::Skip) => Either::Left(Either::Left(())),
+            Ok(PathOutcome::UpdateMetdata(p, mv)) => Either::Left(Either::Right((p, mv))),
+            Ok(PathOutcome::StoreAndInvalidate(p, mv, c)) => {
+                Either::Right(Either::Left((p, mv, c)))
+            }
+            Err(e) => Either::Right(Either::Right(e)),
         });
+
+    println!("Storing...");
+    // Insertion is single threaded in SQLite
+    // TODO Coordinate this with calls to the CDN API
+    let mut db = db::Db::open()?;
+    let tx = db.transaction()?;
+    for (path, metadata_values) in &updates {
+        db::update_metadata(&tx, path, &metadata_values)?;
+    }
+    for (path, metadata_values, checksum) in &store {
+        db::upsert_entry(&tx, path, &metadata_values, *checksum)?;
+    }
+    tx.commit()?;
 
     for e in &errors {
         error!("error encountered: {e}")
     }
 
-    updates
-        .into_iter()
+    // Update either way, to at least avoid computing checksums in the future
+    //db.upsert_entry(&path, &metadata, checksum)
+    //    .expect("entry should be added without issues");
+
+    store
+        .iter()
         // TODO Actually perform the update
         .for_each(|u| println!("update: {u:?}"));
 
     println!(
-        "Summary: {} unchanged out of {file_count} files",
-        unchanged.len()
+        "Summary: {} unchanged, {} with different metadata and {} changed files.",
+        unchanged.len(),
+        updates.len(),
+        store.len()
     );
+    println!("Total:  {file_count} files.");
     Ok(if errors.len() > 0 {
         2.into()
     } else {
         ExitCode::SUCCESS
     })
+}
+
+// Control what do with the paths
+enum PathOutcome<'p> {
+    // Path is unchanged, nothing to do (no CDN or DB update)
+    Skip,
+    // Path medata have changed, but the checksum is the same, only update the DB
+    UpdateMetdata(&'p Path, MetadataValues),
+    // Path checksum and metadata have changed, update both the DB and the CDN
+    StoreAndInvalidate(&'p Path, MetadataValues, Checksum),
 }
