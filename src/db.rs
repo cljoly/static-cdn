@@ -11,6 +11,8 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 use rusqlite_migration::{Migrations, M};
 
+use crate::Checksum;
+
 static MIGRATIONS: LazyLock<Migrations<'static>> =
     LazyLock::new(|| Migrations::new(vec![M::up(include_str!("db/1_up.sql"))]));
 
@@ -47,18 +49,23 @@ impl Db {
         Ok(rows.next()?.is_some())
     }
 
-    pub fn exists_by_hash(&self, path: &Path, metadata: &Metadata, hash: u64) -> Result<bool> {
+    pub fn exists_by_len_and_checksum(
+        &self,
+        path: &Path,
+        metadata: &Metadata,
+        checksum: Checksum,
+    ) -> Result<bool> {
         let mut stmt = self.conn.prepare_cached(
             r#"SELECT *
             FROM files
             WHERE path = ?1 AND size = ?2 AND checksum = ?3"#,
         )?;
         let len = metadata.len();
-        let mut rows = stmt.query(params![path.to_str(), len, hash.to_le_bytes(),])?;
+        let mut rows = stmt.query(params![path.to_str(), len, checksum,])?;
         Ok(rows.next()?.is_some())
     }
 
-    pub fn upsert_entry(&self, path: &Path, metadata: &Metadata, hash: u64) -> Result<()> {
+    pub fn upsert_entry(&self, path: &Path, metadata: &Metadata, checksum: Checksum) -> Result<()> {
         let mut stmt = self.conn.prepare_cached(
             r#"INSERT OR REPLACE INTO files (path, datetime, size, checksum)
             VALUES (?1, ?2, ?3, ?4)"#,
@@ -68,15 +75,13 @@ impl Db {
         let n = stmt
             .execute(params![
                 path.to_str(),
-                // The loss of precision is quite small, worste case we will trigger a hash
+                // The loss of precision is quite small, worste case we will trigger a rehash
                 modified_since_epoch.as_secs_f64(),
                 len,
-                // Need to store as bytes, because a u64 can be bigger than a i64 and sqlite only
-                // supports i64 (https://www.sqlite.org/datatype3.html)
-                hash.to_le_bytes(),
+                checksum,
             ])
             .expect(&format!(
-                "should be able to insert {path:?}, {modified_since_epoch:?}, {len:?}, {hash}"
+                "should be able to insert {path:?}, {modified_since_epoch:?}, {len:?}, {checksum:?}"
             ));
         debug_assert_eq!(1, n, "exactly one row should change");
         Ok(())
