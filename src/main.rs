@@ -36,7 +36,11 @@ fn main() -> Result<ExitCode> {
             }
         })
         .collect::<Vec<_>>();
-    let (potential_updates, errors): (Vec<_>, Vec<_>) = all_files
+    let file_count = all_files.len();
+
+    // A Vec<()> takes no memory per element, but it's useful to count how many such elements there
+    // are
+    let ((unchanged, updates), errors): ((Vec<()>, Vec<_>), Vec<_>) = all_files
         .par_iter()
         .map_init(
             || db::Db::open().unwrap(),
@@ -66,7 +70,8 @@ fn main() -> Result<ExitCode> {
             },
         )
         .partition_map(|r| match r {
-            Ok(optional_path) => Either::Left(optional_path),
+            Ok(None) => Either::Left(Either::Left(())),
+            Ok(Some(path)) => Either::Left(Either::Right(path)),
             Err(e) => Either::Right(e),
         });
 
@@ -74,11 +79,15 @@ fn main() -> Result<ExitCode> {
         error!("error encountered: {e}")
     }
 
-    potential_updates
+    updates
         .into_iter()
-        .filter_map(|u| u)
+        // TODO Actually perform the update
         .for_each(|u| println!("update: {u:?}"));
 
+    println!(
+        "Summary: {} unchanged out of {file_count} files",
+        unchanged.len()
+    );
     Ok(if errors.len() > 0 {
         2.into()
     } else {
