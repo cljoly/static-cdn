@@ -1,4 +1,6 @@
 [package]
+authors = ["Clément Joly <foss@131719.xyz>"]
+license = "MPL-2.0"
 name = "static-cdn"
 version = "0.1.0"
 edition = "2021"
