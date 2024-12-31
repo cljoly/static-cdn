@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::time::UNIX_EPOCH;
 
-use anyhow::Result;
+use rusqlite::Result;
 use rusqlite::{params, Connection, Transaction};
 use rusqlite_migration::{Migrations, M};
 
@@ -19,8 +19,10 @@ use crate::Checksum;
 static MIGRATIONS: LazyLock<Migrations<'static>> =
     LazyLock::new(|| Migrations::new(vec![M::up(include_str!("db/1_up.sql"))]));
 
+static DB_NAME: &'static str = "./static-cdn.sqlite";
+
 // Set up a connection, with PRAGMAs and schema migrations
-fn setup(mut conn: Connection) -> Result<Connection> {
+fn setup(mut conn: Connection) -> anyhow::Result<Connection> {
     // WAL mode is required to for concurrent read
     conn.execute_batch(
         "PRAGMA journal_mode = WAL; \
@@ -34,8 +36,15 @@ fn setup(mut conn: Connection) -> Result<Connection> {
     Ok(conn)
 }
 
-pub fn open() -> Result<Connection> {
-    let conn = Connection::open("./static-cdn.sqlite")?;
+pub fn open() -> anyhow::Result<Connection> {
+    let conn = Connection::open(DB_NAME)?;
+    setup(conn)
+}
+
+/// In memory transient database
+#[cfg(test)]
+pub fn open_transient() -> anyhow::Result<Connection> {
+    let conn = Connection::open_in_memory()?;
     setup(conn)
 }
 
@@ -125,7 +134,7 @@ pub fn update_metadata(
 }
 
 // Holds the values for the metadata columns in the table
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MetadataValues {
     modified_since_epoch_sec: f64,
     size: u64,
@@ -156,8 +165,83 @@ impl From<&Metadata> for MetadataValues {
 mod tests {
     use super::*;
 
+    use anyhow::Result;
+
     #[test]
     fn migrations() -> Result<()> {
         Ok(MIGRATIONS.validate()?)
+    }
+
+    #[test]
+    #[should_panic]
+    fn update_fails_when_nothing_exists() {
+        let _ = open_transient().and_then(|mut c| {
+            let _ = c.transaction().and_then(|tx| {
+                // This should panic and nothing else can in this test
+                let _ = update_metadata(
+                    &tx,
+                    &Path::new("/made_up/for/testing"),
+                    &MetadataValues::default(),
+                );
+                Ok(())
+            });
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn insertion_and_checks() -> Result<()> {
+        let path = Path::new("/made_up/for/testing");
+        let initial_metadata = MetadataValues {
+            modified_since_epoch_sec: 12.,
+            size: 10,
+        };
+        let updated_metadata = MetadataValues {
+            size: 99,
+            ..initial_metadata
+        };
+        let initial_checksum = Checksum::from(10);
+        let updated_checksum = Checksum::from(20);
+        let mut conn = open_transient()?;
+
+        assert!(
+            !exists_by_metadata(&mut conn, &path, &initial_metadata)?,
+            "nothing should be inserted yet"
+        );
+
+        {
+            let tx = conn.transaction()?;
+            upsert_entry(&tx, &path, &initial_metadata, initial_checksum)?;
+            tx.commit()?;
+        }
+        assert!(
+            exists_by_metadata(&mut conn, &path, &initial_metadata)?,
+            "should be inserted now"
+        );
+        assert!(
+            exists_by_len_and_checksum(&mut conn, &path, &initial_metadata, initial_checksum)?,
+            "should be inserted now, with the right checksum"
+        );
+
+        // Update
+        {
+            let tx = conn.transaction()?;
+            upsert_entry(&tx, &path, &updated_metadata, updated_checksum)?;
+            tx.commit()?;
+        }
+        assert!(
+            !exists_by_metadata(&mut conn, &path, &initial_metadata)?,
+            "should not find the old version"
+        );
+        assert!(
+            exists_by_metadata(&mut conn, &path, &updated_metadata)?,
+            "should be updated"
+        );
+        assert!(
+            exists_by_len_and_checksum(&mut conn, &path, &updated_metadata, updated_checksum)?,
+            "should be updated, with the right checksum"
+        );
+
+        Ok(())
     }
 }

@@ -17,7 +17,7 @@ use twox_hash::XxHash64;
 const SEED: u64 = 0x431C_71C5_AD99_39B4;
 const CHUNK_SIZE: usize = 1 << 16;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct Checksum {
     sum: [u8; 8],
 }
