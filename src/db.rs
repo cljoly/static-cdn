@@ -27,6 +27,7 @@ impl Db {
     pub fn open() -> Result<Self> {
         let mut conn = Connection::open("./static-cdn.sqlite")?;
 
+        // WAL mode is required to for concurrent read
         conn.execute_batch(
             "PRAGMA journal_mode = WAL; \
              PRAGMA synchronous = NORMAL; \

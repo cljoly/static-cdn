@@ -5,10 +5,10 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-use std::env;
 use std::path::Path;
 use std::process::ExitCode;
 
+use clap::Parser;
 use rayon::iter::Either;
 use rayon::prelude::*;
 
@@ -18,16 +18,31 @@ use walkdir::WalkDir;
 
 mod checksum;
 mod db;
+#[cfg(test)]
+mod tests;
 
 use crate::checksum::Checksum;
 
 use self::db::MetadataValues;
 
+/// A CDN cache invalidation tool for your static site
+#[derive(Parser, Debug)]
+#[command(version, about)]
+struct Args {
+    /// Directory holding the static site cached by the CDN
+    #[arg()]
+    root_dir: String,
+
+    /// Whether to use fast change detection (relies on the filesystem metadata to detect some of the
+    /// changes)
+    #[arg(short, long, default_value_t = false)]
+    force_deep_check: bool,
+}
+
 fn main() -> Result<ExitCode> {
-    let mut args = env::args();
-    let _ = args.next().unwrap(); // Throw away the binary’s name
-    let root_dir = args.next().unwrap();
-    let all_files = WalkDir::new(root_dir)
+    let args = Args::parse();
+    println!("{args:?}");
+    let all_files = WalkDir::new(args.root_dir)
         .into_iter()
         .filter_map(|entry| {
             let entry = entry.unwrap();
@@ -50,7 +65,7 @@ fn main() -> Result<ExitCode> {
                 let path = entry.path();
                 let metadata_values = MetadataValues::from(&path.metadata()?);
 
-                if !db.exists_by_metadata(path, &metadata_values)? {
+                if args.force_deep_check || !db.exists_by_metadata(path, &metadata_values)? {
                     let checksum = Checksum::compute(path)?;
                     if db.exists_by_len_and_checksum(path, &metadata_values, checksum)? {
                         Ok(PathOutcome::UpdateMetdata(&path, metadata_values))
