@@ -26,9 +26,9 @@ fn setup(mut conn: Connection) -> anyhow::Result<Connection> {
     // WAL mode is required to for concurrent read
     conn.execute_batch(
         "PRAGMA journal_mode = WAL; \
-             PRAGMA synchronous = NORMAL; \
-             PRAGMA locking_mode = EXCLUSIVE; \
-             PRAGMA temp_store = MEMORY;",
+         PRAGMA synchronous = NORMAL; \
+         PRAGMA locking_mode = EXCLUSIVE; \
+         PRAGMA temp_store = MEMORY;",
     )?;
 
     MIGRATIONS.to_latest(&mut conn)?;

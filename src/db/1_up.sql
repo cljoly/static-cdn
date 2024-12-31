@@ -1,5 +1,5 @@
 CREATE TABLE files (
-    path TEXT PRIMARY KEY,
+    path TEXT PRIMARY KEY NOT NULL,
     modified_since_epoch_sec REAL NOT NULL, -- Float, number of seconds (and nanoseconds) since UNIX epoch
     size INT NOT NULL,
     checksum BLOB NOT NULL
