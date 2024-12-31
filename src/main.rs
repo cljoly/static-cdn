@@ -60,14 +60,14 @@ fn main() -> Result<ExitCode> {
     let ((unchanged, updates), (store, errors)): ((Vec<()>, Vec<_>), (Vec<_>, Vec<_>)) = all_files
         .par_iter()
         .map_init(
-            || db::Db::open().unwrap(),
-            |db, entry| -> Result<PathOutcome> {
+            || db::open().unwrap(),
+            |conn, entry| -> Result<PathOutcome> {
                 let path = entry.path();
                 let metadata_values = MetadataValues::from(&path.metadata()?);
 
-                if args.force_deep_check || !db.exists_by_metadata(path, &metadata_values)? {
+                if args.force_deep_check || !db::exists_by_metadata(conn, path, &metadata_values)? {
                     let checksum = Checksum::compute(path)?;
-                    if db.exists_by_len_and_checksum(path, &metadata_values, checksum)? {
+                    if db::exists_by_len_and_checksum(conn, path, &metadata_values, checksum)? {
                         Ok(PathOutcome::UpdateMetdata(&path, metadata_values))
                     } else {
                         Ok(PathOutcome::StoreAndInvalidate(
@@ -93,8 +93,8 @@ fn main() -> Result<ExitCode> {
     println!("Storing...");
     // Insertion is single threaded in SQLite
     // TODO Coordinate this with calls to the CDN API
-    let mut db = db::Db::open()?;
-    let tx = db.transaction()?;
+    let mut conn = db::open()?;
+    let tx = conn.transaction()?;
     for (path, metadata_values) in &updates {
         db::update_metadata(&tx, path, &metadata_values)?;
     }

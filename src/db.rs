@@ -19,63 +19,57 @@ use crate::Checksum;
 static MIGRATIONS: LazyLock<Migrations<'static>> =
     LazyLock::new(|| Migrations::new(vec![M::up(include_str!("db/1_up.sql"))]));
 
-pub struct Db {
-    conn: Connection,
-}
-
-impl Db {
-    pub fn open() -> Result<Self> {
-        let mut conn = Connection::open("./static-cdn.sqlite")?;
-
-        // WAL mode is required to for concurrent read
-        conn.execute_batch(
-            "PRAGMA journal_mode = WAL; \
+// Set up a connection, with PRAGMAs and schema migrations
+fn setup(mut conn: Connection) -> Result<Connection> {
+    // WAL mode is required to for concurrent read
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL; \
              PRAGMA synchronous = NORMAL; \
              PRAGMA locking_mode = EXCLUSIVE; \
              PRAGMA temp_store = MEMORY;",
-        )?;
+    )?;
 
-        MIGRATIONS.to_latest(&mut conn)?;
+    MIGRATIONS.to_latest(&mut conn)?;
 
-        Ok(Db { conn })
-    }
+    Ok(conn)
+}
 
-    pub fn transaction(&mut self) -> Result<Transaction> {
-        Ok(self.conn.transaction()?)
-    }
+pub fn open() -> Result<Connection> {
+    let conn = Connection::open("./static-cdn.sqlite")?;
+    setup(conn)
+}
 
-    pub fn exists_by_metadata(
-        &self,
-        path: &Path,
-        metadata_values: &MetadataValues,
-    ) -> Result<bool> {
-        let mut stmt = self.conn.prepare_cached(
-            r#"SELECT *
+pub fn exists_by_metadata(
+    conn: &mut Connection,
+    path: &Path,
+    metadata_values: &MetadataValues,
+) -> Result<bool> {
+    let mut stmt = conn.prepare_cached(
+        r#"SELECT *
             FROM files
             WHERE path = ?1 AND modified_since_epoch_sec = ?2 AND size = ?3"#,
-        )?;
-        let MetadataValues {
-            modified_since_epoch_sec,
-            size,
-        } = metadata_values;
-        let mut rows = stmt.query(params![path.to_str(), modified_since_epoch_sec, size,])?;
-        Ok(rows.next()?.is_some())
-    }
+    )?;
+    let MetadataValues {
+        modified_since_epoch_sec,
+        size,
+    } = metadata_values;
+    let mut rows = stmt.query(params![path.to_str(), modified_since_epoch_sec, size,])?;
+    Ok(rows.next()?.is_some())
+}
 
-    pub fn exists_by_len_and_checksum(
-        &self,
-        path: &Path,
-        metadata_values: &MetadataValues,
-        checksum: Checksum,
-    ) -> Result<bool> {
-        let mut stmt = self.conn.prepare_cached(
-            r#"SELECT *
+pub fn exists_by_len_and_checksum(
+    conn: &mut Connection,
+    path: &Path,
+    metadata_values: &MetadataValues,
+    checksum: Checksum,
+) -> Result<bool> {
+    let mut stmt = conn.prepare_cached(
+        r#"SELECT *
             FROM files
             WHERE path = ?1 AND size = ?2 AND checksum = ?3"#,
-        )?;
-        let mut rows = stmt.query(params![path.to_str(), metadata_values.size, checksum,])?;
-        Ok(rows.next()?.is_some())
-    }
+    )?;
+    let mut rows = stmt.query(params![path.to_str(), metadata_values.size, checksum,])?;
+    Ok(rows.next()?.is_some())
 }
 
 pub fn upsert_entry(
