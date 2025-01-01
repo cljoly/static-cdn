@@ -10,12 +10,12 @@ use std::process::ExitCode;
 use anyhow::Result;
 use clap::Parser;
 use indicatif::ParallelProgressIterator;
-use indicatif::ProgressIterator;
 use log::error;
 use rayon::iter::Either;
 use rayon::prelude::*;
 use walkdir::WalkDir;
 
+mod cdn;
 mod checksum;
 mod db;
 mod rel_path;
@@ -128,7 +128,7 @@ fn main() -> Result<ExitCode> {
         updates.len(),
         store.len()
     );
-    println!("Total:  {file_count} files.");
+    println!("Total: {file_count} files.");
     Ok(if errors.len() > 0 {
         2.into()
     } else {
