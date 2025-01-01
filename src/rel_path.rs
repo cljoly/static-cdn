@@ -59,7 +59,11 @@ impl<'a> RelPathBuilder<'a> {
         );
 
         RelPath {
-            rel_path: format!("{rel_path:?}"),
+            rel_path: rel_path
+                .to_str()
+                // Would require some downstream support when generating urls, give up for now
+                .expect("invalid unicode in file names is not supported")
+                .to_owned(),
         }
     }
 }
