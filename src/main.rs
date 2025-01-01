@@ -1,11 +1,10 @@
-/* Copyright © 2024 Clément Joly
+/* Copyright © 2024-2025 Clément Joly
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -18,12 +17,14 @@ use walkdir::WalkDir;
 
 mod checksum;
 mod db;
+mod rel_path;
 #[cfg(test)]
 mod tests;
 
 use crate::checksum::Checksum;
 
 use self::db::MetadataValues;
+use self::rel_path::{RelPath, RelPathBuilder};
 
 /// A CDN cache invalidation tool for your static site
 #[derive(Parser, Debug)]
@@ -41,8 +42,7 @@ struct Args {
 
 fn main() -> Result<ExitCode> {
     let args = Args::parse();
-    println!("{args:?}");
-    let all_files = WalkDir::new(args.root_dir)
+    let all_files = WalkDir::new(&args.root_dir)
         .into_iter()
         .filter_map(|entry| {
             let entry = entry.unwrap();
@@ -55,6 +55,8 @@ fn main() -> Result<ExitCode> {
         .collect::<Vec<_>>();
     let file_count = all_files.len();
 
+    let db_path_builder = RelPathBuilder::new(&args.root_dir);
+
     // A Vec<()> takes no memory per element, but it's useful to count how many such elements there
     // are
     let ((unchanged, updates), (store, errors)): ((Vec<()>, Vec<_>), (Vec<_>, Vec<_>)) = all_files
@@ -63,15 +65,18 @@ fn main() -> Result<ExitCode> {
             || db::open().unwrap(),
             |conn, entry| -> Result<PathOutcome> {
                 let path = entry.path();
+                let db_path = db_path_builder.db_path(path);
                 let metadata_values = MetadataValues::from(&path.metadata()?);
 
-                if args.force_deep_check || !db::exists_by_metadata(conn, path, &metadata_values)? {
+                if args.force_deep_check
+                    || !db::exists_by_metadata(conn, &db_path, &metadata_values)?
+                {
                     let checksum = Checksum::compute(path)?;
-                    if db::exists_by_len_and_checksum(conn, path, &metadata_values, checksum)? {
-                        Ok(PathOutcome::UpdateMetdata(&path, metadata_values))
+                    if db::exists_by_len_and_checksum(conn, &db_path, &metadata_values, checksum)? {
+                        Ok(PathOutcome::UpdateMetdata(db_path, metadata_values))
                     } else {
                         Ok(PathOutcome::StoreAndInvalidate(
-                            &path,
+                            db_path,
                             metadata_values,
                             checksum,
                         ))
@@ -107,10 +112,6 @@ fn main() -> Result<ExitCode> {
         error!("error encountered: {e}")
     }
 
-    // Update either way, to at least avoid computing checksums in the future
-    //db.upsert_entry(&path, &metadata, checksum)
-    //    .expect("entry should be added without issues");
-
     store
         .iter()
         // TODO Actually perform the update
@@ -131,11 +132,11 @@ fn main() -> Result<ExitCode> {
 }
 
 // Control what do with the paths
-enum PathOutcome<'p> {
+enum PathOutcome {
     // Path is unchanged, nothing to do (no CDN or DB update)
     Skip,
     // Path medata have changed, but the checksum is the same, only update the DB
-    UpdateMetdata(&'p Path, MetadataValues),
+    UpdateMetdata(RelPath, MetadataValues),
     // Path checksum and metadata have changed, update both the DB and the CDN
-    StoreAndInvalidate(&'p Path, MetadataValues, Checksum),
+    StoreAndInvalidate(RelPath, MetadataValues, Checksum),
 }

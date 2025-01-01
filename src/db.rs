@@ -1,4 +1,4 @@
-/* Copyright © 2024 Clément Joly
+/* Copyright © 2024-2025 Clément Joly
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,7 +6,6 @@
  */
 
 use std::fs::Metadata;
-use std::path::Path;
 use std::sync::LazyLock;
 use std::time::UNIX_EPOCH;
 
@@ -14,6 +13,7 @@ use rusqlite::Result;
 use rusqlite::{params, Connection, Transaction};
 use rusqlite_migration::{Migrations, M};
 
+use crate::rel_path::RelPath;
 use crate::Checksum;
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =
@@ -50,7 +50,7 @@ pub fn open_transient() -> anyhow::Result<Connection> {
 
 pub fn exists_by_metadata(
     conn: &mut Connection,
-    path: &Path,
+    path: &RelPath,
     metadata_values: &MetadataValues,
 ) -> Result<bool> {
     let mut stmt = conn.prepare_cached(
@@ -62,13 +62,13 @@ pub fn exists_by_metadata(
         modified_since_epoch_sec,
         size,
     } = metadata_values;
-    let mut rows = stmt.query(params![path.to_str(), modified_since_epoch_sec, size,])?;
+    let mut rows = stmt.query(params![path, modified_since_epoch_sec, size,])?;
     Ok(rows.next()?.is_some())
 }
 
 pub fn exists_by_len_and_checksum(
     conn: &mut Connection,
-    path: &Path,
+    path: &RelPath,
     metadata_values: &MetadataValues,
     checksum: Checksum,
 ) -> Result<bool> {
@@ -77,13 +77,13 @@ pub fn exists_by_len_and_checksum(
             FROM files
             WHERE path = ?1 AND size = ?2 AND checksum = ?3"#,
     )?;
-    let mut rows = stmt.query(params![path.to_str(), metadata_values.size, checksum,])?;
+    let mut rows = stmt.query(params![path, metadata_values.size, checksum,])?;
     Ok(rows.next()?.is_some())
 }
 
 pub fn upsert_entry(
     tx: &Transaction,
-    path: &Path,
+    path: &RelPath,
     metadata_values: &MetadataValues,
     checksum: Checksum,
 ) -> Result<()> {
@@ -96,12 +96,7 @@ pub fn upsert_entry(
         size,
     } = metadata_values;
     let n = stmt
-        .execute(params![
-            path.to_str(),
-            modified_since_epoch_sec,
-            size,
-            checksum,
-        ])
+        .execute(params![path, modified_since_epoch_sec, size, checksum,])
         .expect(&format!(
             "should be able to insert {path:?}, {metadata_values:?}, {checksum:?}"
         ));
@@ -111,7 +106,7 @@ pub fn upsert_entry(
 
 pub fn update_metadata(
     tx: &Transaction,
-    path: &Path,
+    path: &RelPath,
     metadata_values: &MetadataValues,
 ) -> Result<()> {
     let mut stmt = tx.prepare_cached(
@@ -125,7 +120,7 @@ pub fn update_metadata(
         size,
     } = metadata_values;
     let n = stmt
-        .execute(params![&path.to_str(), modified_since_epoch_sec, size,])
+        .execute(params![&path, modified_since_epoch_sec, size,])
         .expect(&format!(
             "should be able to update {path:?}, {metadata_values:?}"
         ));
@@ -133,7 +128,7 @@ pub fn update_metadata(
     Ok(())
 }
 
-// Holds the values for the metadata columns in the table
+/// Holds the values for the metadata columns in the table
 #[derive(Debug, Default)]
 pub struct MetadataValues {
     modified_since_epoch_sec: f64,
@@ -163,9 +158,17 @@ impl From<&Metadata> for MetadataValues {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
+    use crate::rel_path::RelPathBuilder;
+
     use anyhow::Result;
+
+    fn test_db_path() -> RelPath {
+        RelPathBuilder::new("/made_up/for_testing")
+            .db_path("/made_up/for_testing/some_other_folder/some_other_file")
+    }
 
     #[test]
     fn migrations() -> Result<()> {
@@ -178,11 +181,7 @@ mod tests {
         let _ = open_transient().and_then(|mut c| {
             let _ = c.transaction().and_then(|tx| {
                 // This should panic and nothing else can in this test
-                let _ = update_metadata(
-                    &tx,
-                    &Path::new("/made_up/for/testing"),
-                    &MetadataValues::default(),
-                );
+                let _ = update_metadata(&tx, &test_db_path(), &MetadataValues::default());
                 Ok(())
             });
             Ok(())
@@ -191,7 +190,7 @@ mod tests {
 
     #[test]
     fn insertion_and_checks() -> Result<()> {
-        let path = Path::new("/made_up/for/testing");
+        let db_path = test_db_path();
         let initial_metadata = MetadataValues {
             modified_since_epoch_sec: 12.,
             size: 10,
@@ -205,40 +204,40 @@ mod tests {
         let mut conn = open_transient()?;
 
         assert!(
-            !exists_by_metadata(&mut conn, &path, &initial_metadata)?,
+            !exists_by_metadata(&mut conn, &db_path, &initial_metadata)?,
             "nothing should be inserted yet"
         );
 
         {
             let tx = conn.transaction()?;
-            upsert_entry(&tx, &path, &initial_metadata, initial_checksum)?;
+            upsert_entry(&tx, &db_path, &initial_metadata, initial_checksum)?;
             tx.commit()?;
         }
         assert!(
-            exists_by_metadata(&mut conn, &path, &initial_metadata)?,
+            exists_by_metadata(&mut conn, &db_path, &initial_metadata)?,
             "should be inserted now"
         );
         assert!(
-            exists_by_len_and_checksum(&mut conn, &path, &initial_metadata, initial_checksum)?,
+            exists_by_len_and_checksum(&mut conn, &db_path, &initial_metadata, initial_checksum)?,
             "should be inserted now, with the right checksum"
         );
 
         // Update
         {
             let tx = conn.transaction()?;
-            upsert_entry(&tx, &path, &updated_metadata, updated_checksum)?;
+            upsert_entry(&tx, &db_path, &updated_metadata, updated_checksum)?;
             tx.commit()?;
         }
         assert!(
-            !exists_by_metadata(&mut conn, &path, &initial_metadata)?,
+            !exists_by_metadata(&mut conn, &db_path, &initial_metadata)?,
             "should not find the old version"
         );
         assert!(
-            exists_by_metadata(&mut conn, &path, &updated_metadata)?,
+            exists_by_metadata(&mut conn, &db_path, &updated_metadata)?,
             "should be updated"
         );
         assert!(
-            exists_by_len_and_checksum(&mut conn, &path, &updated_metadata, updated_checksum)?,
+            exists_by_len_and_checksum(&mut conn, &db_path, &updated_metadata, updated_checksum)?,
             "should be updated, with the right checksum"
         );
 
