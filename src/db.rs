@@ -158,3 +158,37 @@ impl From<&Metadata> for MetadataValues {
         }
     }
 }
+
+// Convenience function to serialize for snapshotting, not meant to be used in the actual
+// application
+#[cfg(test)]
+fn read_all_files_rows(conn: &Connection) -> tabled::Table {
+    use rusqlite::types::Value;
+    use tabled::builder::Builder;
+    use tabled::settings::{Panel, Style};
+
+    let query = "SELECT * FROM files";
+    let mut stmt = conn.prepare(query).unwrap();
+    let count = stmt.column_count();
+
+    let mut table = Builder::default();
+    table.push_record(
+        stmt.column_names()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+    );
+    stmt.query(params![])
+        .unwrap()
+        .mapped(|row| {
+            Ok((0..count)
+                .into_iter()
+                .map(|i| format!("{:?}", row.get_unwrap::<_, Value>(i)))
+                .collect::<Vec<_>>())
+        })
+        .for_each(|s| table.push_record(s.unwrap()));
+
+    let mut table = table.build();
+    table.with(Style::psql()).with(Panel::header(query));
+    table
+}

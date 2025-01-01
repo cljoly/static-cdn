@@ -1,0 +1,8 @@
+---
+source: src/db/tests.rs
+expression: read_all_files_rows(&conn)
+snapshot_kind: text
+---
+ SELECT * FROM files                               
+------+--------------------------+------+----------
+ path | modified_since_epoch_sec | size | checksum

@@ -5,7 +5,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-
 use super::*;
 
 use crate::rel_path::RelPathBuilder;
@@ -54,12 +53,14 @@ fn insertion_and_checks() -> Result<()> {
         !exists_by_metadata(&mut conn, &db_path, &initial_metadata)?,
         "nothing should be inserted yet"
     );
+    insta::assert_snapshot!("empty_table", read_all_files_rows(&conn));
 
     {
         let tx = conn.transaction()?;
         upsert_entry(&tx, &db_path, &initial_metadata, initial_checksum)?;
         tx.commit()?;
     }
+    insta::assert_snapshot!("first_instert", read_all_files_rows(&conn));
     assert!(
         exists_by_metadata(&mut conn, &db_path, &initial_metadata)?,
         "should be inserted now"
@@ -75,6 +76,7 @@ fn insertion_and_checks() -> Result<()> {
         upsert_entry(&tx, &db_path, &updated_metadata, updated_checksum)?;
         tx.commit()?;
     }
+    insta::assert_snapshot!("after_update", read_all_files_rows(&conn));
     assert!(
         !exists_by_metadata(&mut conn, &db_path, &initial_metadata)?,
         "should not find the old version"
