@@ -7,12 +7,13 @@
 
 use std::process::ExitCode;
 
+use anyhow::Result;
 use clap::Parser;
+use indicatif::ParallelProgressIterator;
+use indicatif::ProgressIterator;
+use log::error;
 use rayon::iter::Either;
 use rayon::prelude::*;
-
-use anyhow::Result;
-use log::error;
 use walkdir::WalkDir;
 
 mod checksum;
@@ -42,6 +43,7 @@ struct Args {
 
 fn main() -> Result<ExitCode> {
     let args = Args::parse();
+    println!("Scanning {}...", args.root_dir);
     let all_files = WalkDir::new(&args.root_dir)
         .into_iter()
         .filter_map(|entry| {
@@ -57,10 +59,12 @@ fn main() -> Result<ExitCode> {
 
     let db_path_builder = RelPathBuilder::new(&args.root_dir);
 
+    println!("Detecting changes");
     // A Vec<()> takes no memory per element, but it's useful to count how many such elements there
     // are
     let ((unchanged, updates), (store, errors)): ((Vec<()>, Vec<_>), (Vec<_>, Vec<_>)) = all_files
         .par_iter()
+        .progress()
         .map_init(
             || db::open().unwrap(),
             |conn, entry| -> Result<PathOutcome> {
@@ -95,15 +99,15 @@ fn main() -> Result<ExitCode> {
             Err(e) => Either::Right(Either::Right(e)),
         });
 
-    println!("Storing...");
-    // Insertion is single threaded in SQLite
-    // TODO Coordinate this with calls to the CDN API
+    println!("Updating the cache");
+    // Write operations are single-threaded in SQLite
     let mut conn = db::open()?;
     let tx = conn.transaction()?;
     for (path, metadata_values) in &updates {
         db::update_metadata(&tx, path, &metadata_values)?;
     }
     for (path, metadata_values, checksum) in &store {
+        // TODO Coordinate this with calls to the CDN API
         db::upsert_entry(&tx, path, &metadata_values, *checksum)?;
     }
     tx.commit()?;
@@ -112,12 +116,13 @@ fn main() -> Result<ExitCode> {
         error!("error encountered: {e}")
     }
 
-    store
-        .iter()
-        // TODO Actually perform the update
-        .for_each(|u| println!("update: {u:?}"));
+    dbg!(store.chunks(30).len());
 
-    println!(
+    dbg!(store.chunks(30).count());
+    // TODO Actually perform the update
+    //.for_each(|u| println!("update: {u:?}"));
+
+    log::debug!(
         "Summary: {} unchanged, {} with different metadata and {} changed files.",
         unchanged.len(),
         updates.len(),
