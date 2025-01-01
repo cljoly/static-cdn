@@ -1,4 +1,4 @@
-/* Copyright © 2024 Clément Joly
+/* Copyright © 2024-2025 Clément Joly
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,7 +11,7 @@ use rusqlite::ToSql;
 
 /// The database should hold paths relative to the folder walked through and the path part of urls
 /// is also the relative path to that folder. Therefore, it makes sense to work most of the time
-/// with those relative paths, as strings. The pair of types [`DbPath`] and [`DbPathBuilder`]
+/// with those relative paths, as strings. The pair of types [`RelPath`] and [`RelPathBuilder`]
 /// should make it easier to get that right, by keeping the root folder and returning relative
 /// paths each time it's called. It also enforces that the right type is passed to DB functions.
 #[derive(Debug)]
@@ -51,6 +51,7 @@ impl<'a> RelPathBuilder<'a> {
     where
         P: AsRef<Path> + ?Sized,
     {
+        // `strip_prefix` should be cheap, see https://github.com/BurntSushi/walkdir/issues/5#issuecomment-218515992
         let rel_path = child.as_ref().strip_prefix(self.root_folder).expect("directories are walked in from the root folder, they should be relative. This is a bug, please report");
         debug_assert!(
             rel_path.is_relative(),
