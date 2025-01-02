@@ -19,8 +19,12 @@ use crate::Checksum;
 #[cfg(test)]
 mod tests;
 
-static MIGRATIONS: LazyLock<Migrations<'static>> =
-    LazyLock::new(|| Migrations::new(vec![M::up(include_str!("db/1_up.sql"))]));
+static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
+    Migrations::new(vec![
+        M::up(include_str!("db/1_up.sql")),
+        M::up(include_str!("db/2_up.sql")),
+    ])
+});
 
 static DB_NAME: &'static str = "./static-cdn.sqlite";
 

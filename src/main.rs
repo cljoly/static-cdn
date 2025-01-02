@@ -57,6 +57,7 @@ fn main() -> Result<ExitCode> {
         .collect::<Vec<_>>();
     let file_count = all_files.len();
 
+    let mut conn = db::open()?;
     let db_path_builder = RelPathBuilder::new(&args.root_dir);
 
     println!("Detecting changes");
@@ -101,7 +102,6 @@ fn main() -> Result<ExitCode> {
 
     println!("Updating the cache");
     // Write operations are single-threaded in SQLite
-    let mut conn = db::open()?;
     let tx = conn.transaction()?;
     for (path, metadata_values) in &updates {
         db::update_metadata(&tx, path, &metadata_values)?;
