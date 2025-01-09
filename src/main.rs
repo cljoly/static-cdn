@@ -17,6 +17,7 @@ use walkdir::WalkDir;
 
 mod cdn;
 mod checksum;
+mod config;
 mod db;
 mod rel_path;
 #[cfg(test)]
@@ -43,6 +44,8 @@ struct Args {
 
 fn main() -> Result<ExitCode> {
     let args = Args::parse();
+
+    let config = config::load();
     println!("Scanning {}...", args.root_dir);
     let all_files = WalkDir::new(&args.root_dir)
         .into_iter()
