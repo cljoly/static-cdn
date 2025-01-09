@@ -26,7 +26,7 @@ static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
     ])
 });
 
-static DB_NAME: &'static str = "./static-cdn.sqlite";
+static DB_NAME: &'static str = concat!("./", env!("CARGO_PKG_NAME"), ".sqlite");
 
 // Set up a connection, with PRAGMAs and schema migrations
 fn setup(mut conn: Connection) -> anyhow::Result<Connection> {
